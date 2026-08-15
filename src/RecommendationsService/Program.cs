@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Http.Resilience;
 using Polly;
 using Polly.CircuitBreaker;
 using Polly.Timeout;
+using RecommendationsService.BackgroundServices;
 using RecommendationsService.Clients;
 using RecommendationsService.Models;
 using RecommendationsService.Services;
@@ -13,8 +15,11 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Register Recommendations Engine
+// Register Recommendations & EVCache Precompute Services
 builder.Services.AddSingleton<IRecommendationsEngine, RecommendationsEngine>();
+builder.Services.AddSingleton<IPrecomputeQueue, PrecomputeQueue>();
+builder.Services.AddSingleton<IHomepagePrecomputeEngine, HomepagePrecomputeEngine>();
+builder.Services.AddHostedService<EVCachePrecomputeWorker>();
 
 // Register Distributed Redis Cache
 builder.Services.AddStackExchangeRedisCache(options =>
@@ -77,7 +82,9 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-// Health check endpoint
+// -----------------------------------------------------------------------------
+// Health Check Endpoint
+// -----------------------------------------------------------------------------
 app.MapGet("/health", () => Results.Ok(new
 {
     status = "Healthy",
@@ -87,7 +94,9 @@ app.MapGet("/health", () => Results.Ok(new
 .WithName("HealthCheck")
 .WithOpenApi();
 
-// Recommendations endpoint with Cache-Aside + Polly v8 Resilience
+// -----------------------------------------------------------------------------
+// STEP 1 PATTERN: On-Demand Cache-Aside + Downstream Polly Resilience
+// -----------------------------------------------------------------------------
 app.MapGet("/recommendations/{userId}", async (
     string userId,
     IDistributedCache cache,
@@ -116,7 +125,6 @@ app.MapGet("/recommendations/{userId}", async (
     }
     catch (Exception ex)
     {
-        // Graceful cache degradation if Redis connection is briefly unavailable
         logger.LogWarning(ex, "Redis cache read failed for key '{CacheKey}'. Falling through to downstream service.", cacheKey);
     }
 
@@ -195,6 +203,89 @@ app.MapGet("/recommendations/{userId}", async (
     return Results.Ok(recommendations);
 })
 .WithName("GetRecommendations")
+.WithOpenApi();
+
+// -----------------------------------------------------------------------------
+// STEP 4 PATTERN: Netflix-Style EVCache (Primary Store Zero-SQL Read API)
+// -----------------------------------------------------------------------------
+app.MapGet("/homepage/{userId}", async (
+    string userId,
+    IDistributedCache cache,
+    IHomepagePrecomputeEngine precomputeEngine,
+    IPrecomputeQueue precomputeQueue,
+    ILogger<Program> logger,
+    HttpContext httpContext,
+    CancellationToken cancellationToken) =>
+{
+    var cacheKey = $"user:{userId}:homepage:v1";
+
+    try
+    {
+        // 1. Direct Zero-SQL Read from Redis Primary Store
+        var cachedHomepage = await cache.GetStringAsync(cacheKey, cancellationToken);
+        if (!string.IsNullOrEmpty(cachedHomepage))
+        {
+            logger.LogInformation("[EVCache Read] Primary Store HIT for '{CacheKey}'", cacheKey);
+            httpContext.Response.Headers.Append("X-Cache-Store", "EVCache-Primary");
+            httpContext.Response.Headers.Append("X-Source", "Precomputed");
+
+            var layout = JsonSerializer.Deserialize<HomepageLayoutResponse>(cachedHomepage);
+            if (layout is not null)
+            {
+                return Results.Ok(layout);
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "[EVCache Read] Redis primary store lookup failed for '{CacheKey}'", cacheKey);
+    }
+
+    // 2. Fail-Fast Cold Cache Miss:
+    // Do NOT execute synchronized heavy SQL or downstream calls on the request thread!
+    logger.LogInformation("[EVCache Read] Cache MISS for '{CacheKey}'. Dispatching out-of-band precompute job.", cacheKey);
+    httpContext.Response.Headers.Append("X-Cache-Store", "EVCache-Miss-Fallback");
+    httpContext.Response.Headers.Append("X-Source", "GlobalDefault");
+
+    // Enqueue out-of-band background calculation without blocking
+    await precomputeQueue.QueuePrecomputeAsync(
+        new PrecomputeRequest(UserId: userId, Priority: "High", QueuedAt: DateTimeOffset.UtcNow),
+        CancellationToken.None
+    );
+
+    // Immediately return the global default fallback layout
+    var defaultLayout = precomputeEngine.GetGlobalDefaultLayout();
+    return Results.Ok(defaultLayout);
+})
+.WithName("GetHomepageLayout")
+.WithOpenApi();
+
+// -----------------------------------------------------------------------------
+// STEP 4 BATCH TRIGGER: Parallel Batch Pre-computation Engine
+// -----------------------------------------------------------------------------
+app.MapPost("/homepage/precompute/batch", async (
+    string[]? userIds,
+    IHomepagePrecomputeEngine precomputeEngine,
+    ILogger<Program> logger,
+    CancellationToken cancellationToken) =>
+{
+    var targetUsers = userIds != null && userIds.Length > 0
+        ? userIds
+        : new[] { "user1", "user2", "user3", "user4", "user5", "user123", "user4k", "vip_customer" };
+
+    var sw = Stopwatch.StartNew();
+    var count = await precomputeEngine.BatchPrecomputeAndCacheAsync(targetUsers, cancellationToken);
+    sw.Stop();
+
+    return Results.Ok(new
+    {
+        status = "Completed",
+        processedUsers = count,
+        elapsedMilliseconds = sw.ElapsedMilliseconds,
+        timestamp = DateTimeOffset.UtcNow
+    });
+})
+.WithName("TriggerBatchPrecompute")
 .WithOpenApi();
 
 app.Run();
