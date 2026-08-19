@@ -1,59 +1,43 @@
-@description('The name of the Azure Cache for Redis instance.')
+@description('The name of the Azure Managed Redis instance.')
 param redisCacheName string
 
-@description('Location for the Redis cache resource.')
+@description('Location for the Redis resource.')
 param location string = resourceGroup().location
 
-@description('The pricing tier of the Redis cache.')
+@description('The SKU of the Azure Managed Redis instance.')
 @allowed([
-  'Basic'
-  'Standard'
-  'Premium'
+  'Balanced_B0'
+  'Balanced_B1'
+  'Balanced_B3'
+  'MemoryOptimized_M10'
+  'ComputeOptimized_X10'
 ])
-param skuName string = 'Basic'
+param skuName string = 'Balanced_B0'
 
-@description('The SKU family of the Redis cache.')
-@allowed([
-  'C'
-  'P'
-])
-param skuFamily string = 'C'
-
-@description('The size of the Redis cache.')
-@allowed([
-  0
-  1
-  2
-  3
-  4
-  5
-  6
-])
-param skuCapacity int = 0
-
-resource redis 'Microsoft.Cache/redis@2023-08-01' = {
+resource redisEnterprise 'Microsoft.Cache/redisEnterprise@2024-09-01-preview' = {
   name: redisCacheName
   location: location
+  sku: {
+    name: skuName
+  }
+}
+
+resource redisDatabase 'Microsoft.Cache/redisEnterprise/databases@2024-09-01-preview' = {
+  parent: redisEnterprise
+  name: 'default'
   properties: {
-    sku: {
-      name: skuName
-      family: skuFamily
-      capacity: skuCapacity
-    }
-    enableNonSslPort: false
-    minimumTlsVersion: '1.2'
-    redisConfiguration: {
-      'maxmemory-policy': 'volatile-lru'
-    }
+    clusteringPolicy: 'OSSCluster'
+    evictionPolicy: 'VolatileLRU'
+    port: 10000
   }
 }
 
 @description('The hostname of the Redis cache.')
-output redisHost string = redis.properties.hostName
+output redisHost string = redisEnterprise.properties.hostName
 
 @description('The SSL port of the Redis cache.')
-output redisSslPort int = redis.properties.sslPort
+output redisSslPort int = 10000
 
 @description('The primary connection string for Redis cache.')
 #disable-next-line outputs-should-not-contain-secrets
-output connectionString string = '${redis.properties.hostName}:${redis.properties.sslPort},password=${redis.listKeys().primaryKey},ssl=True,abortConnect=False'
+output connectionString string = '${redisEnterprise.properties.hostName}:10000,password=${redisDatabase.listKeys().primaryKey},ssl=True,abortConnect=False'

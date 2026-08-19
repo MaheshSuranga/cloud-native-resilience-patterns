@@ -15,15 +15,13 @@ var planName = '${resourcePrefix}-plan-${environmentName}'
 var entitlementsName = '${resourcePrefix}-entitlements-${uniqueSuffix}'
 var recommendationsName = '${resourcePrefix}-recommendations-${uniqueSuffix}'
 
-// 1. Provision Azure Cache for Redis
+// 1. Provision Azure Managed Redis
 module redisModule 'modules/redis.bicep' = {
   name: 'redisDeployment'
   params: {
     redisCacheName: redisName
     location: location
-    skuName: 'Basic'
-    skuFamily: 'C'
-    skuCapacity: 0
+    skuName: 'Balanced_B0'
   }
 }
 
