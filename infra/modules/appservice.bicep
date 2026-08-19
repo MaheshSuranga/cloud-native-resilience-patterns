@@ -10,8 +10,9 @@ param recommendationsAppName string
 @description('Location for all App Service resources.')
 param location string = resourceGroup().location
 
-@description('The pricing tier for the App Service Plan (Standard S1 required for deployment slots).')
+@description('The pricing tier for the App Service Plan (Standard S1 or Premium required for deployment slots).')
 @allowed([
+  'B1'
   'S1'
   'S2'
   'S3'
@@ -31,7 +32,6 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   kind: 'linux'
   sku: {
     name: appServiceSku
-    tier: 'Standard'
   }
   properties: {
     reserved: true
