@@ -31,6 +31,10 @@ jobs:
         run: |
           az group create --name ${{ env.AZURE_RESOURCE_GROUP }} --location ${{ env.AZURE_LOCATION }}
 
+      - name: Register Azure Cache provider namespace
+        run: |
+          az provider register --namespace Microsoft.Cache --wait
+
       - name: Provision Infrastructure via Bicep
         uses: azure/arm-deploy@v1
         with:
