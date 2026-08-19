@@ -90,8 +90,10 @@ resource recommendationsApp 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
-// 4. Recommendations App Service - Staging Deployment Slot
-resource recommendationsStagingSlot 'Microsoft.Web/sites/slots@2023-12-01' = {
+var supportsSlots = (appServiceSku != 'B1' && appServiceSku != 'F1')
+
+// 4. Recommendations App Service - Staging Deployment Slot (Enabled for Standard & Premium SKUs)
+resource recommendationsStagingSlot 'Microsoft.Web/sites/slots@2023-12-01' = if (supportsSlots) {
   parent: recommendationsApp
   name: 'staging'
   location: location
@@ -101,7 +103,7 @@ resource recommendationsStagingSlot 'Microsoft.Web/sites/slots@2023-12-01' = {
     httpsOnly: true
     siteConfig: {
       linuxFxVersion: 'DOTNETCORE|8.0'
-      alwaysOn: true
+      alwaysOn: (appServiceSku != 'F1')
       healthCheckPath: '/health'
       appSettings: [
         {
@@ -122,7 +124,7 @@ resource recommendationsStagingSlot 'Microsoft.Web/sites/slots@2023-12-01' = {
 }
 
 // 5. Slot-Sticky Settings Configuration
-resource slotConfig 'Microsoft.Web/sites/config@2023-12-01' = {
+resource slotConfig 'Microsoft.Web/sites/config@2023-12-01' = if (supportsSlots) {
   parent: recommendationsApp
   name: 'slotConfigNames'
   properties: {
@@ -142,4 +144,4 @@ output entitlementsUrl string = 'https://${entitlementsApp.properties.defaultHos
 output recommendationsProdUrl string = 'https://${recommendationsApp.properties.defaultHostName}'
 
 @description('Staging slot URL of the Recommendations Service.')
-output recommendationsStagingUrl string = 'https://${recommendationsApp.name}-staging.azurewebsites.net'
+output recommendationsStagingUrl string = supportsSlots ? 'https://${recommendationsApp.name}-staging.azurewebsites.net' : 'https://${recommendationsApp.properties.defaultHostName}'
