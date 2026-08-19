@@ -25,6 +25,9 @@ module redisModule 'modules/redis.bicep' = {
   }
 }
 
+@description('The SKU for the App Service Plan.')
+param appServiceSku string = 'P1v3'
+
 // 2. Provision App Service Plan, EntitlementsService & RecommendationsService (with Staging Slot)
 module appServiceModule 'modules/appservice.bicep' = {
   name: 'appServiceDeployment'
@@ -33,7 +36,7 @@ module appServiceModule 'modules/appservice.bicep' = {
     entitlementsAppName: entitlementsName
     recommendationsAppName: recommendationsName
     location: location
-    appServiceSku: 'S1'
+    appServiceSku: appServiceSku
     redisConnectionString: redisModule.outputs.connectionString
   }
 }
