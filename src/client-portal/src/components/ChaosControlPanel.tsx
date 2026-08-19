@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Flame, Clock, CheckCircle2, Sliders, PlayCircle } from 'lucide-react';
+import { apiConfig } from '../config/api';
 
 interface ChaosControlPanelProps {
   currentUserId: string;
@@ -19,7 +20,7 @@ export const ChaosControlPanel: React.FC<ChaosControlPanelProps> = ({
     try {
       // Blast 5 uncached requests with simulateError=true to trip circuit breaker (50% threshold, min 4 requests)
       const requests = [1, 2, 3, 4, 5].map((i) =>
-        fetch(`/recommendations/chaos_fail_${i}?simulateError=true`).catch(() => null)
+        fetch(apiConfig.url(`/recommendations/chaos_fail_${i}?simulateError=true`)).catch(() => null)
       );
       await Promise.all(requests);
       setChaosLog(`5 downstream HTTP 500 errors injected! Circuit Breaker tripped to OPEN for 15s. Probing profile '${currentUserId}'...`);
@@ -37,7 +38,7 @@ export const ChaosControlPanel: React.FC<ChaosControlPanelProps> = ({
     try {
       // Blast 5 parallel requests with 5000ms delay to trigger 2.0s Polly timeout and trip the circuit breaker
       const requests = [1, 2, 3, 4, 5].map((i) =>
-        fetch(`/recommendations/chaos_delay_${i}?simulateDelay=5000`).catch(() => null)
+        fetch(apiConfig.url(`/recommendations/chaos_delay_${i}?simulateDelay=5000`)).catch(() => null)
       );
       await Promise.all(requests);
       setChaosLog(`2.0s Polly Timeout triggered across requests! Circuit Breaker tripped to OPEN for 15s. Probing profile '${currentUserId}'...`);
@@ -53,7 +54,7 @@ export const ChaosControlPanel: React.FC<ChaosControlPanelProps> = ({
     setIsExecuting(true);
     setChaosLog('Executing parallel EVCache batch pre-compute across user cohort via Task.WhenAll...');
     try {
-      const resp = await fetch('/homepage/precompute/batch', { method: 'POST' });
+      const resp = await fetch(apiConfig.url('/homepage/precompute/batch'), { method: 'POST' });
       if (resp.ok) {
         const data = await resp.json();
         setChaosLog(`Batch Pre-computation Completed! Precomputed ${data.processedUsers} users in ${data.elapsedMilliseconds}ms.`);

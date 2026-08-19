@@ -96,9 +96,23 @@ builder.Services.AddHttpClient<IEntitlementsClient, EntitlementsClient>(client =
     });
 });
 
+// CORS: Allow the Azure Static Web Apps frontend to call this API
+var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
+    ?? new[] { "http://localhost:3000" };
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+    {
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyHeader()
+              .AllowAnyMethod();
+    });
+});
+
 var app = builder.Build();
 
 // Enable Swagger UI across all environments for developer experience
+app.UseCors();
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {

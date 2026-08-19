@@ -6,6 +6,7 @@ import {
   CacheStatus
 } from '../types/recommendations';
 import { STATIC_POPULAR_FALLBACKS } from '../data/staticFallbacks';
+import { apiConfig } from '../config/api';
 
 interface UseRecommendationsOptions {
   timeoutMs?: number;
@@ -53,7 +54,7 @@ export function useRecommendations(userId: string, options: UseRecommendationsOp
     const timerId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch(`/recommendations/${encodeURIComponent(targetUserId)}`, {
+      const response = await fetch(apiConfig.url(`/recommendations/${encodeURIComponent(targetUserId)}`), {
         signal: controller.signal,
         headers: {
           'Accept': 'application/json'

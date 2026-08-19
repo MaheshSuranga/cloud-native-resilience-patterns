@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { HomepageLayoutResponse, CacheStatus } from '../types/recommendations';
 import { STATIC_FALLBACK_HERO, STATIC_POPULAR_FALLBACKS } from '../data/staticFallbacks';
+import { apiConfig } from '../config/api';
 
 export function useHomepageLayout(userId: string) {
   const [layout, setLayout] = useState<HomepageLayoutResponse>({
@@ -22,7 +23,7 @@ export function useHomepageLayout(userId: string) {
     const startTime = performance.now();
 
     try {
-      const response = await fetch(`/homepage/${encodeURIComponent(targetUserId)}`, {
+      const response = await fetch(apiConfig.url(`/homepage/${encodeURIComponent(targetUserId)}`), {
         headers: { 'Accept': 'application/json' }
       });
 
