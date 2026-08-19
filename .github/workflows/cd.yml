@@ -1,0 +1,125 @@
+name: CD - Azure Provisioning & Canary Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  AZURE_RESOURCE_GROUP: rg-resilience-prod
+  AZURE_LOCATION: eastus
+  DOTNET_VERSION: '8.0.x'
+  NODE_VERSION: '20.x'
+
+jobs:
+  # ============================================================================
+  # Job 1: Apply Infrastructure-as-Code (Bicep)
+  # ============================================================================
+  deploy-infra:
+    name: 🏗️ Deploy Azure IaC (Bicep)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Ensure Resource Group Exists
+        run: |
+          az group create --name ${{ env.AZURE_RESOURCE_GROUP }} --location ${{ env.AZURE_LOCATION }}
+
+      - name: Provision Infrastructure via Bicep
+        uses: azure/arm-deploy@v1
+        with:
+          subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
+          template: infra/main.bicep
+          parameters: environmentName=prod resourcePrefix=resilience-demo
+
+  # ============================================================================
+  # Job 2: Deploy Microservices & Execute Canary Shift with Staging Slot
+  # ============================================================================
+  deploy-backend-canary:
+    name: 🚀 Deploy Backend & Canary Shift
+    needs: [deploy-infra]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # 1. Build & Deploy EntitlementsService
+      - name: Publish EntitlementsService
+        run: |
+          dotnet publish src/EntitlementsService/EntitlementsService.csproj -c Release -o ./publish/entitlements
+
+      - name: Deploy EntitlementsService to Azure App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: resilience-demo-entitlements
+          package: ./publish/entitlements
+
+      # 2. Build & Deploy RecommendationsService to STAGING Slot
+      - name: Publish RecommendationsService
+        run: |
+          dotnet publish src/RecommendationsService/RecommendationsService.csproj -c Release -o ./publish/recommendations
+
+      - name: Deploy RecommendationsService to STAGING Slot
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: resilience-demo-recommendations
+          slot-name: staging
+          package: ./publish/recommendations
+
+      # 3. Execute Automated Health Gates & Progressive Canary Shift
+      - name: Execute Canary Rollout & Atomic Slot Swap
+        run: |
+          chmod +x ./scripts/canary-rollout.sh
+          ./scripts/canary-rollout.sh \
+            -g ${{ env.AZURE_RESOURCE_GROUP }} \
+            -n resilience-demo-recommendations \
+            -s staging \
+            -w 15
+
+  # ============================================================================
+  # Job 3: Deploy Frontend (Client Portal SPA)
+  # ============================================================================
+  deploy-frontend:
+    name: 🌐 Deploy Client Portal SPA
+    needs: [deploy-infra]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies & Build Portal
+        run: |
+          cd src/client-portal
+          npm ci
+          npm run build
+
+      - name: Deploy to Azure Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: "upload"
+          app_location: "/src/client-portal"
+          output_location: "dist"

@@ -1,0 +1,66 @@
+name: CI - Build, Test & Lint
+
+on:
+  pull_request:
+    branches: [ main ]
+  push:
+    branches: [ 'feature/**', 'fix/**', 'dev' ]
+  workflow_dispatch:
+
+jobs:
+  # 1. Validate Infrastructure-as-Code (Bicep)
+  validate-bicep:
+    name: 🛡️ Validate Bicep Templates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Bicep Syntax & Lint
+        run: |
+          az bicep build --file infra/main.bicep
+
+  # 2. Build & Test .NET 8 Microservices
+  build-and-test-backend:
+    name: ⚙️ Build & Test Backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore CloudNativeResiliencePatterns.sln
+
+      - name: Build Solution
+        run: dotnet build CloudNativeResiliencePatterns.sln --no-restore -c Release
+
+      - name: Run Tests
+        run: dotnet test CloudNativeResiliencePatterns.sln --no-build -c Release --verbosity normal
+
+  # 3. Lint & Build React Frontend
+  build-frontend:
+    name: 🌐 Build & Typecheck Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+
+      - name: Install dependencies
+        run: |
+          cd src/client-portal
+          npm ci
+
+      - name: Typecheck & Build Portal
+        run: |
+          cd src/client-portal
+          npm run build
