@@ -31,16 +31,6 @@ jobs:
         run: |
           az group create --name ${{ env.AZURE_RESOURCE_GROUP }} --location ${{ env.AZURE_LOCATION }}
 
-      - name: Ensure Azure Cache provider is registered
-        run: |
-          registration_state="$(az provider show --namespace Microsoft.Cache --query registrationState -o tsv)"
-          if [ "$registration_state" = "Registered" ]; then
-            echo "Microsoft.Cache provider is already registered."
-          else
-            echo "Microsoft.Cache provider state is '$registration_state'. Attempting registration..."
-            az provider register --namespace Microsoft.Cache --wait
-          fi
-
       - name: Provision Infrastructure via Bicep
         uses: azure/arm-deploy@v1
         with:
