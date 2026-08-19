@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Caching.StackExchangeRedis;
 using Microsoft.Extensions.Http.Resilience;
 using Polly;
 using Polly.CircuitBreaker;
@@ -13,7 +15,10 @@ using RecommendationsService.Services;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new() { Title = "Recommendations & EVCache Microservice API", Version = "v1" });
+});
 
 // Register Recommendations & EVCache Precompute Services
 builder.Services.AddSingleton<IRecommendationsEngine, RecommendationsEngine>();
@@ -21,11 +26,28 @@ builder.Services.AddSingleton<IPrecomputeQueue, PrecomputeQueue>();
 builder.Services.AddSingleton<IHomepagePrecomputeEngine, HomepagePrecomputeEngine>();
 builder.Services.AddHostedService<EVCachePrecomputeWorker>();
 
-// Register Distributed Redis Cache
-builder.Services.AddStackExchangeRedisCache(options =>
+// Register Memory Cache & Distributed Redis Cache with Resilient Hybrid Fallback
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<IDistributedCache>(sp =>
 {
-    options.Configuration = builder.Configuration.GetConnectionString("Redis") ?? "localhost:6379";
-    options.InstanceName = "rec:";
+    var memoryCache = sp.GetRequiredService<IMemoryCache>();
+    var logger = sp.GetRequiredService<ILogger<ResilientDistributedCache>>();
+    var config = sp.GetRequiredService<IConfiguration>();
+
+    var redisConn = config.GetConnectionString("Redis") ?? "localhost:6379";
+    if (!redisConn.Contains("connectTimeout", StringComparison.OrdinalIgnoreCase))
+    {
+        redisConn += ",connectTimeout=300,syncTimeout=300,abortConnect=false";
+    }
+
+    var redisOptions = new RedisCacheOptions
+    {
+        Configuration = redisConn,
+        InstanceName = "rec:"
+    };
+
+    var innerRedisCache = new RedisCache(redisOptions);
+    return new ResilientDistributedCache(innerRedisCache, memoryCache, logger);
 });
 
 // Configure Resilient Entitlements HTTP Client with Polly v8 Resilience Pipeline
@@ -39,7 +61,7 @@ builder.Services.AddHttpClient<IEntitlementsClient, EntitlementsClient>(client =
     var serviceProvider = context.ServiceProvider;
     var logger = serviceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Polly.ResiliencePipeline");
 
-    // Strategy 1: Hard Timeout (2.0 seconds)
+    // Strategy 1: Hard Timeout (2.0 seconds cancellation)
     pipelineBuilder.AddTimeout(new HttpTimeoutStrategyOptions
     {
         Timeout = TimeSpan.FromSeconds(2)
@@ -76,11 +98,16 @@ builder.Services.AddHttpClient<IEntitlementsClient, EntitlementsClient>(client =
 
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
+// Enable Swagger UI across all environments for developer experience
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Recommendations API v1");
+    c.RoutePrefix = "swagger";
+});
+
+// Root redirect to Swagger UI
+app.MapGet("/", () => Results.Redirect("/swagger"));
 
 // -----------------------------------------------------------------------------
 // Health Check Endpoint
@@ -99,6 +126,8 @@ app.MapGet("/health", () => Results.Ok(new
 // -----------------------------------------------------------------------------
 app.MapGet("/recommendations/{userId}", async (
     string userId,
+    int? simulateDelay,
+    bool? simulateError,
     IDistributedCache cache,
     IEntitlementsClient entitlementsClient,
     IRecommendationsEngine recommendationsEngine,
@@ -106,26 +135,30 @@ app.MapGet("/recommendations/{userId}", async (
     HttpContext httpContext,
     CancellationToken cancellationToken) =>
 {
+    var isChaosRequest = (simulateDelay.HasValue && simulateDelay.Value > 0) || (simulateError.HasValue && simulateError.Value);
     var cacheKey = $"user:{userId}";
 
-    // Phase 1: Cache-Aside Check
-    try
+    // Phase 1: Cache-Aside Check (skip on explicit chaos requests so failure pipeline is tested)
+    if (!isChaosRequest)
     {
-        var cachedData = await cache.GetStringAsync(cacheKey, cancellationToken);
-        if (!string.IsNullOrEmpty(cachedData))
+        try
         {
-            logger.LogInformation("Cache HIT for key '{CacheKey}'", cacheKey);
-            httpContext.Response.Headers.Append("X-Cache", "HIT");
-            var cachedResponse = JsonSerializer.Deserialize<RecommendationsResponse>(cachedData);
-            if (cachedResponse is not null)
+            var cachedData = await cache.GetStringAsync(cacheKey, cancellationToken);
+            if (!string.IsNullOrEmpty(cachedData))
             {
-                return Results.Ok(cachedResponse);
+                logger.LogInformation("Cache HIT for key '{CacheKey}'", cacheKey);
+                httpContext.Response.Headers.Append("X-Cache", "HIT");
+                var cachedResponse = JsonSerializer.Deserialize<RecommendationsResponse>(cachedData);
+                if (cachedResponse is not null)
+                {
+                    return Results.Ok(cachedResponse);
+                }
             }
         }
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex, "Redis cache read failed for key '{CacheKey}'. Falling through to downstream service.", cacheKey);
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Redis cache read failed for key '{CacheKey}'. Falling through to downstream service.", cacheKey);
+        }
     }
 
     logger.LogInformation("Cache MISS for key '{CacheKey}'. Calling downstream EntitlementsService.", cacheKey);
@@ -135,7 +168,7 @@ app.MapGet("/recommendations/{userId}", async (
     UserEntitlementDto entitlement;
     try
     {
-        entitlement = await entitlementsClient.GetEntitlementsAsync(userId, cancellationToken);
+        entitlement = await entitlementsClient.GetEntitlementsAsync(userId, simulateDelay, simulateError, cancellationToken);
     }
     catch (BrokenCircuitException ex)
     {
@@ -158,78 +191,83 @@ app.MapGet("/recommendations/{userId}", async (
         return Results.Json(
             new DegradedResponse(
                 Status: "Degraded",
-                Reason: "CircuitBreakerOpen",
+                Reason: "DownstreamTimeout",
                 RetryAfterSeconds: 15,
-                Message: "Downstream entitlements service timed out. Resilience pipeline triggered fallback."
+                Message: "Downstream entitlements service timed out after 2.0s. Returning degraded fallback."
             ),
             statusCode: StatusCodes.Status503ServiceUnavailable
         );
     }
-    catch (Exception ex)
+    catch (HttpRequestException ex)
     {
-        logger.LogError(ex, "Downstream call failed for User '{UserId}'. Returning 503 degraded fallback.", userId);
+        logger.LogWarning(ex, "Downstream HTTP failure ({StatusCode}). Returning 503 fallback.", ex.StatusCode);
         httpContext.Response.Headers.Append("Retry-After", "15");
         return Results.Json(
             new DegradedResponse(
                 Status: "Degraded",
-                Reason: "CircuitBreakerOpen",
+                Reason: "DownstreamHttpError",
                 RetryAfterSeconds: 15,
-                Message: "Downstream service invocation failed."
+                Message: $"Downstream service failed with HTTP {ex.StatusCode}. Returning degraded fallback."
             ),
             statusCode: StatusCodes.Status503ServiceUnavailable
         );
     }
 
-    // Phase 3: Compute Recommendations
-    var recommendations = recommendationsEngine.GenerateRecommendations(entitlement);
+    // Phase 3: Compute tier-aware recommendations
+    var response = recommendationsEngine.GenerateRecommendations(entitlement);
 
     // Phase 4: Write to Cache-Aside with 60-second sliding expiration
-    try
+    if (!isChaosRequest)
     {
-        var cacheOptions = new DistributedCacheEntryOptions
+        try
         {
-            SlidingExpiration = TimeSpan.FromSeconds(60),
-            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5)
-        };
-        var serialized = JsonSerializer.Serialize(recommendations);
-        await cache.SetStringAsync(cacheKey, serialized, cacheOptions, cancellationToken);
-        logger.LogInformation("Successfully cached recommendations for key '{CacheKey}' with 60s sliding TTL.", cacheKey);
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex, "Redis cache write failed for key '{CacheKey}'. Continuing response flow.", cacheKey);
+            var cacheOptions = new DistributedCacheEntryOptions
+            {
+                SlidingExpiration = TimeSpan.FromSeconds(60),
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5)
+            };
+            var serialized = JsonSerializer.Serialize(response);
+            await cache.SetStringAsync(cacheKey, serialized, cacheOptions, cancellationToken);
+            logger.LogInformation("Written recommendations to cache key '{CacheKey}' (Sliding: 60s)", cacheKey);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Cache write failed for key '{CacheKey}'. Continuing response flow.", cacheKey);
+        }
     }
 
-    return Results.Ok(recommendations);
+    return Results.Ok(response);
 })
 .WithName("GetRecommendations")
 .WithOpenApi();
 
 // -----------------------------------------------------------------------------
-// STEP 4 PATTERN: Netflix-Style EVCache (Primary Store Zero-SQL Read API)
+// STEP 4 PATTERN: Netflix-Style EVCache Fast Zero-SQL Read API
 // -----------------------------------------------------------------------------
 app.MapGet("/homepage/{userId}", async (
     string userId,
     IDistributedCache cache,
-    IHomepagePrecomputeEngine precomputeEngine,
     IPrecomputeQueue precomputeQueue,
+    IHomepagePrecomputeEngine precomputeEngine,
     ILogger<Program> logger,
     HttpContext httpContext,
     CancellationToken cancellationToken) =>
 {
+    var sw = Stopwatch.StartNew();
     var cacheKey = $"user:{userId}:homepage:v1";
 
+    // Fast Cache Read (< 5ms)
     try
     {
-        // 1. Direct Zero-SQL Read from Redis Primary Store
-        var cachedHomepage = await cache.GetStringAsync(cacheKey, cancellationToken);
-        if (!string.IsNullOrEmpty(cachedHomepage))
+        var cachedJson = await cache.GetStringAsync(cacheKey, cancellationToken);
+        if (!string.IsNullOrEmpty(cachedJson))
         {
-            logger.LogInformation("[EVCache Read] Primary Store HIT for '{CacheKey}'", cacheKey);
+            sw.Stop();
+            logger.LogInformation("EVCache HIT for '{CacheKey}' in {ElapsedMs}ms", cacheKey, sw.ElapsedMilliseconds);
             httpContext.Response.Headers.Append("X-Cache-Store", "EVCache-Primary");
-            httpContext.Response.Headers.Append("X-Source", "Precomputed");
+            httpContext.Response.Headers.Append("X-Read-Latency-Ms", sw.ElapsedMilliseconds.ToString());
 
-            var layout = JsonSerializer.Deserialize<HomepageLayoutResponse>(cachedHomepage);
+            var layout = JsonSerializer.Deserialize<HomepageLayoutResponse>(cachedJson);
             if (layout is not null)
             {
                 return Results.Ok(layout);
@@ -238,44 +276,51 @@ app.MapGet("/homepage/{userId}", async (
     }
     catch (Exception ex)
     {
-        logger.LogWarning(ex, "[EVCache Read] Redis primary store lookup failed for '{CacheKey}'", cacheKey);
+        logger.LogWarning(ex, "EVCache read failed for '{CacheKey}'. Falling back to default layout.", cacheKey);
     }
 
-    // 2. Fail-Fast Cold Cache Miss:
-    // Do NOT execute synchronized heavy SQL or downstream calls on the request thread!
-    logger.LogInformation("[EVCache Read] Cache MISS for '{CacheKey}'. Dispatching out-of-band precompute job.", cacheKey);
+    sw.Stop();
+    logger.LogInformation("EVCache MISS for '{CacheKey}'. Fail-fast returning global fallback layout.", cacheKey);
+
+    // Fail-Fast: Immediately return fast global static fallback without blocking on DB
     httpContext.Response.Headers.Append("X-Cache-Store", "EVCache-Miss-Fallback");
-    httpContext.Response.Headers.Append("X-Source", "GlobalDefault");
+    httpContext.Response.Headers.Append("X-Read-Latency-Ms", sw.ElapsedMilliseconds.ToString());
 
-    // Enqueue out-of-band background calculation without blocking
-    await precomputeQueue.QueuePrecomputeAsync(
-        new PrecomputeRequest(UserId: userId, Priority: "High", QueuedAt: DateTimeOffset.UtcNow),
-        CancellationToken.None
-    );
+    // Out-of-Band: Enqueue background job to compute and populate EVCache for next read
+    await precomputeQueue.QueuePrecomputeAsync(new PrecomputeRequest(userId, "High", DateTimeOffset.UtcNow), cancellationToken);
+    logger.LogInformation("Successfully enqueued out-of-band precompute job for user '{UserId}'", userId);
 
-    // Immediately return the global default fallback layout
-    var defaultLayout = precomputeEngine.GetGlobalDefaultLayout();
-    return Results.Ok(defaultLayout);
+    var fallbackLayout = precomputeEngine.GetGlobalDefaultLayout();
+    return Results.Ok(fallbackLayout);
 })
 .WithName("GetHomepageLayout")
 .WithOpenApi();
 
 // -----------------------------------------------------------------------------
-// STEP 4 BATCH TRIGGER: Parallel Batch Pre-computation Engine
+// High-Throughput Batch Precompute Trigger Endpoint
 // -----------------------------------------------------------------------------
 app.MapPost("/homepage/precompute/batch", async (
-    string[]? userIds,
     IHomepagePrecomputeEngine precomputeEngine,
     ILogger<Program> logger,
     CancellationToken cancellationToken) =>
 {
-    var targetUsers = userIds != null && userIds.Length > 0
-        ? userIds
-        : new[] { "user1", "user2", "user3", "user4", "user5", "user123", "user4k", "vip_customer" };
+    var cohort = new[]
+    {
+        "user123",
+        "user_std",
+        "user_premium",
+        "cold_user_99",
+        "user_001",
+        "user_002",
+        "user_003",
+        "user_004"
+    };
 
     var sw = Stopwatch.StartNew();
-    var count = await precomputeEngine.BatchPrecomputeAndCacheAsync(targetUsers, cancellationToken);
+    var count = await precomputeEngine.BatchPrecomputeAndCacheAsync(cohort, cancellationToken);
     sw.Stop();
+
+    logger.LogInformation("Batch precomputed {Count} user homepages in {ElapsedMs}ms", count, sw.ElapsedMilliseconds);
 
     return Results.Ok(new
     {
@@ -285,7 +330,7 @@ app.MapPost("/homepage/precompute/batch", async (
         timestamp = DateTimeOffset.UtcNow
     });
 })
-.WithName("TriggerBatchPrecompute")
+.WithName("BatchPrecompute")
 .WithOpenApi();
 
 app.Run();

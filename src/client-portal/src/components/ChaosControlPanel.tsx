@@ -15,17 +15,17 @@ export const ChaosControlPanel: React.FC<ChaosControlPanelProps> = ({
 
   const injectDownstreamError = async () => {
     setIsExecuting(true);
-    setChaosLog('Blasting 4 downstream 500 errors to trip Polly v8 Circuit Breaker into OPEN state...');
+    setChaosLog(`Blasting 5 failing requests (HTTP 500) through RecommendationsService (User context '${currentUserId}') to trip Polly v8 Circuit Breaker...`);
     try {
-      // Blast multiple failing calls directly or through endpoint
+      // Blast 5 uncached requests with simulateError=true to trip circuit breaker (50% threshold, min 4 requests)
       const requests = [1, 2, 3, 4, 5].map((i) =>
-        fetch(`/entitlements/chaos_user_${i}?simulateError=true`).catch(() => null)
+        fetch(`/recommendations/chaos_fail_${i}?simulateError=true`).catch(() => null)
       );
       await Promise.all(requests);
-      setChaosLog('Dispatched failure injection. Triggering recommendations to observe circuit trip...');
+      setChaosLog(`5 downstream HTTP 500 errors injected! Circuit Breaker tripped to OPEN for 15s. Probing profile '${currentUserId}'...`);
       onRefresh();
     } catch {
-      setChaosLog('Error dispatching chaos request.');
+      setChaosLog('Error dispatching downstream chaos request.');
     } finally {
       setIsExecuting(false);
     }
@@ -33,9 +33,14 @@ export const ChaosControlPanel: React.FC<ChaosControlPanelProps> = ({
 
   const injectLatencyDelay = async () => {
     setIsExecuting(true);
-    setChaosLog('Injecting simulated 5000ms delay into EntitlementsService (Exceeds 2.0s Polly Timeout)...');
+    setChaosLog(`Blasting 5 timing-out requests (5000ms delay) through RecommendationsService (Exceeds 2.0s Polly Timeout)...`);
     try {
-      await fetch(`/entitlements/${encodeURIComponent(currentUserId)}?simulateDelay=5000`).catch(() => null);
+      // Blast 5 parallel requests with 5000ms delay to trigger 2.0s Polly timeout and trip the circuit breaker
+      const requests = [1, 2, 3, 4, 5].map((i) =>
+        fetch(`/recommendations/chaos_delay_${i}?simulateDelay=5000`).catch(() => null)
+      );
+      await Promise.all(requests);
+      setChaosLog(`2.0s Polly Timeout triggered across requests! Circuit Breaker tripped to OPEN for 15s. Probing profile '${currentUserId}'...`);
       onRefresh();
     } catch {
       setChaosLog('Dispatched latency test.');
@@ -78,7 +83,7 @@ export const ChaosControlPanel: React.FC<ChaosControlPanelProps> = ({
         <button
           onClick={injectDownstreamError}
           disabled={isExecuting}
-          className="flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-rose-950/60 hover:bg-rose-900/60 text-rose-300 border border-rose-600/40 text-xs font-semibold transition-all disabled:opacity-50"
+          className="flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-rose-950/60 hover:bg-rose-900/60 text-rose-300 border border-rose-600/40 text-xs font-semibold transition-all disabled:opacity-50 active:scale-[0.98]"
         >
           <Flame className="w-4 h-4 text-rose-400" />
           Trip Circuit Breaker (500 Error)
@@ -87,7 +92,7 @@ export const ChaosControlPanel: React.FC<ChaosControlPanelProps> = ({
         <button
           onClick={injectLatencyDelay}
           disabled={isExecuting}
-          className="flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-amber-950/60 hover:bg-amber-900/60 text-amber-300 border border-amber-600/40 text-xs font-semibold transition-all disabled:opacity-50"
+          className="flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-amber-950/60 hover:bg-amber-900/60 text-amber-300 border border-amber-600/40 text-xs font-semibold transition-all disabled:opacity-50 active:scale-[0.98]"
         >
           <Clock className="w-4 h-4 text-amber-400" />
           Simulate 5s Timeout Delay
@@ -96,7 +101,7 @@ export const ChaosControlPanel: React.FC<ChaosControlPanelProps> = ({
         <button
           onClick={triggerBatchPrecompute}
           disabled={isExecuting}
-          className="flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-indigo-950/60 hover:bg-indigo-900/60 text-indigo-300 border border-indigo-600/40 text-xs font-semibold transition-all disabled:opacity-50"
+          className="flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-indigo-950/60 hover:bg-indigo-900/60 text-indigo-300 border border-indigo-600/40 text-xs font-semibold transition-all disabled:opacity-50 active:scale-[0.98]"
         >
           <PlayCircle className="w-4 h-4 text-indigo-400" />
           Run EVCache Batch Precompute

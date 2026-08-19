@@ -3,15 +3,23 @@ using EntitlementsService.Models;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new() { Title = "Entitlements Microservice API", Version = "v1" });
+});
 
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
+// Enable Swagger UI across all environments for developer experience
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Entitlements API v1");
+    c.RoutePrefix = "swagger";
+});
+
+// Root redirect to Swagger UI
+app.MapGet("/", () => Results.Redirect("/swagger"));
 
 app.MapGet("/health", () => Results.Ok(new
 {

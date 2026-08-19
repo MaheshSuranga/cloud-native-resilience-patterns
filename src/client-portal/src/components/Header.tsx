@@ -32,7 +32,7 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="sticky top-0 z-50 glass-panel border-b border-slate-800/80 px-4 lg:px-8 py-3.5">
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
         {/* Brand & Mode Switcher */}
-        <div className="flex items-center gap-6">
+        <div className="flex flex-wrap items-center gap-4 sm:gap-6">
           <div className="flex items-center gap-2.5">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-500 via-indigo-600 to-emerald-400 flex items-center justify-center shadow-lg shadow-cyan-500/20">
               <Tv className="w-5 h-5 text-white" />
@@ -48,7 +48,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           {/* Mode Switcher */}
-          <div className="hidden sm:flex items-center p-1 rounded-xl bg-slate-900/90 border border-slate-800 text-xs">
+          <div className="flex items-center p-1 rounded-xl bg-slate-900/90 border border-slate-800 text-xs">
             <button
               onClick={() => onModeChange('CacheAside')}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all ${
@@ -75,7 +75,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Telemetry & User Profile */}
-        <div className="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-between md:justify-end">
           <ResilienceTelemetryBadge
             circuitState={circuitState}
             cacheStatus={cacheStatus}
@@ -89,10 +89,13 @@ export const Header: React.FC<HeaderProps> = ({
               <User className="w-3.5 h-3.5 text-slate-400 mr-1.5" />
               <select
                 value={currentUserId}
+                
                 onChange={(e) => onUserChange(e.target.value)}
                 className="bg-transparent text-slate-200 font-medium focus:outline-none cursor-pointer pr-1"
               >
                 <option value="user123" className="bg-slate-900">user123 (4K Ultra Tier)</option>
+                <option value="user_premium" className="bg-slate-900">user_premium (4K Premium Cohort)</option>
+                <option value="user4k" className="bg-slate-900">user4k (4K HDR Tier)</option>
                 <option value="user_std" className="bg-slate-900">user_std (Standard HD)</option>
                 <option value="cold_user_99" className="bg-slate-900">cold_user_99 (Cold Cache)</option>
                 <option value="vip_customer" className="bg-slate-900">vip_customer (VIP Cohort)</option>

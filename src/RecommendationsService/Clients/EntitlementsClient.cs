@@ -14,17 +14,39 @@ public class EntitlementsClient : IEntitlementsClient
         _logger = logger;
     }
 
-    public async Task<UserEntitlementDto> GetEntitlementsAsync(string userId, CancellationToken cancellationToken = default)
+    public async Task<UserEntitlementDto> GetEntitlementsAsync(
+        string userId,
+        int? simulateDelay = null,
+        bool? simulateError = null,
+        CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("Calling EntitlementsService for User '{UserId}' at {BaseAddress}", userId, _httpClient.BaseAddress);
+        var url = $"/entitlements/{Uri.EscapeDataString(userId)}";
+        var queryParams = new List<string>();
 
-        var response = await _httpClient.GetAsync($"/entitlements/{userId}", cancellationToken);
+        if (simulateDelay.HasValue && simulateDelay.Value > 0)
+        {
+            queryParams.Add($"simulateDelay={simulateDelay.Value}");
+        }
+
+        if (simulateError.HasValue && simulateError.Value)
+        {
+            queryParams.Add("simulateError=true");
+        }
+
+        if (queryParams.Count > 0)
+        {
+            url += "?" + string.Join("&", queryParams);
+        }
+
+        _logger.LogInformation("Calling EntitlementsService for User '{UserId}' at {BaseAddress}{Url}", userId, _httpClient.BaseAddress, url);
+
+        var response = await _httpClient.GetAsync(url, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
             _logger.LogError("EntitlementsService responded with status {StatusCode}: {ErrorBody}", response.StatusCode, errorBody);
-            response.EnsureSuccessStatusCode(); // Throws HttpRequestException with status code
+            response.EnsureSuccessStatusCode(); // Throws HttpRequestException with status code to be recorded by Polly
         }
 
         var entitlement = await response.Content.ReadFromJsonAsync<UserEntitlementDto>(cancellationToken: cancellationToken);
