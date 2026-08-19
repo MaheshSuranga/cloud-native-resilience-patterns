@@ -93,15 +93,12 @@ jobs:
           package: ./publish/recommendations
 
       # 3. Configure CORS on Recommendations API to allow the SWA frontend
-      - name: Configure CORS for Static Web App
-        if: ${{ env.SWA_HOSTNAME != '' }}
-        env:
-          SWA_HOSTNAME: ${{ secrets.SWA_HOSTNAME }}
+      - name: Configure CORS on Recommendations API
         run: |
           az webapp cors add \
             --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
             --name ${{ steps.resolve-names.outputs.recommendations_app }} \
-            --allowed-origins "https://${{ secrets.SWA_HOSTNAME }}"
+            --allowed-origins "*"
 
     outputs:
       recommendations_app: ${{ steps.resolve-names.outputs.recommendations_app }}
@@ -109,7 +106,6 @@ jobs:
   # ============================================================================
   # Job 3: Deploy Frontend (Client Portal SPA)
   # Requires AZURE_STATIC_WEB_APPS_API_TOKEN secret to be configured.
-  # To set up: az staticwebapp create → copy deployment token → add to GitHub Secrets.
   # ============================================================================
   deploy-frontend:
     name: 🌐 Deploy Client Portal SPA
@@ -125,10 +121,12 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install dependencies & Build Portal
+        env:
+          VITE_API_BASE_URL: https://${{ needs.deploy-backend.outputs.recommendations_app }}.azurewebsites.net
         run: |
           cd src/client-portal
           npm ci
-          VITE_API_BASE_URL=https://${{ needs.deploy-backend.outputs.recommendations_app }}.azurewebsites.net npm run build
+          npm run build
 
       - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
@@ -138,3 +136,4 @@ jobs:
           action: "upload"
           app_location: "/src/client-portal"
           output_location: "dist"
+          skip_app_build: true

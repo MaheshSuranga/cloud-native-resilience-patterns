@@ -96,14 +96,12 @@ builder.Services.AddHttpClient<IEntitlementsClient, EntitlementsClient>(client =
     });
 });
 
-// CORS: Allow the Azure Static Web Apps frontend to call this API
-var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
-    ?? new[] { "http://localhost:3000" };
+// CORS: Allow frontend clients (Localhost & Azure Static Web Apps) to call this API
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.WithOrigins(allowedOrigins)
+        policy.AllowAnyOrigin()
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
