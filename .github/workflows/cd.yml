@@ -94,10 +94,13 @@ jobs:
 
   # ============================================================================
   # Job 3: Deploy Frontend (Client Portal SPA)
+  # Requires AZURE_STATIC_WEB_APPS_API_TOKEN secret to be configured.
+  # To set up: az staticwebapp create → copy deployment token → add to GitHub Secrets.
   # ============================================================================
   deploy-frontend:
     name: 🌐 Deploy Client Portal SPA
     needs: [deploy-infra]
+    if: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
