@@ -10,8 +10,9 @@ param recommendationsAppName string
 @description('Location for all App Service resources.')
 param location string = resourceGroup().location
 
-@description('The pricing tier for the App Service Plan (Standard S1 or Premium required for deployment slots).')
+@description('The pricing tier for the App Service Plan. F1/B1 for dev/trial, S1+/P1v3+ for production with deployment slots.')
 @allowed([
+  'F1'
   'B1'
   'S1'
   'S2'
@@ -25,7 +26,9 @@ param appServiceSku string = 'S1'
 @secure()
 param redisConnectionString string
 
-// 1. Linux App Service Plan (Standard tier supporting deployment slots & traffic routing)
+var supportsAlwaysOn = (appServiceSku != 'F1')
+
+// 1. Linux App Service Plan
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
   location: location
@@ -48,7 +51,7 @@ resource entitlementsApp 'Microsoft.Web/sites@2023-12-01' = {
     httpsOnly: true
     siteConfig: {
       linuxFxVersion: 'DOTNETCORE|8.0'
-      alwaysOn: true
+      alwaysOn: supportsAlwaysOn
       healthCheckPath: '/health'
       appSettings: [
         {
@@ -70,7 +73,7 @@ resource recommendationsApp 'Microsoft.Web/sites@2023-12-01' = {
     httpsOnly: true
     siteConfig: {
       linuxFxVersion: 'DOTNETCORE|8.0'
-      alwaysOn: true
+      alwaysOn: supportsAlwaysOn
       healthCheckPath: '/health'
       appSettings: [
         {

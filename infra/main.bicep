@@ -25,8 +25,8 @@ module redisModule 'modules/redis.bicep' = {
   }
 }
 
-@description('The SKU for the App Service Plan.')
-param appServiceSku string = 'P1v3'
+@description('The SKU for the App Service Plan. Use F1 (Free) for trial subscriptions, S1/P1v3 for production with deployment slots.')
+param appServiceSku string = 'F1'
 
 // 2. Provision App Service Plan, EntitlementsService & RecommendationsService (with Staging Slot)
 module appServiceModule 'modules/appservice.bicep' = {

@@ -40,10 +40,10 @@ jobs:
           parameters: environmentName=prod resourcePrefix=resilience-demo
 
   # ============================================================================
-  # Job 2: Deploy Microservices & Execute Canary Shift with Staging Slot
+  # Job 2: Deploy Microservices (Direct to Production — F1 tier, no slots)
   # ============================================================================
-  deploy-backend-canary:
-    name: 🚀 Deploy Backend & Canary Shift
+  deploy-backend:
+    name: 🚀 Deploy Backend Services
     needs: [deploy-infra]
     runs-on: ubuntu-latest
     steps:
@@ -60,6 +60,16 @@ jobs:
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      # Resolve dynamic app names from the resource prefix + uniqueString
+      - name: Resolve App Service Names
+        id: resolve-names
+        run: |
+          ENTITLEMENTS_APP=$(az webapp list --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --query "[?contains(name, 'entitlements')].name" -o tsv)
+          RECOMMENDATIONS_APP=$(az webapp list --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --query "[?contains(name, 'recommendations')].name" -o tsv)
+          echo "entitlements_app=$ENTITLEMENTS_APP" >> $GITHUB_OUTPUT
+          echo "recommendations_app=$RECOMMENDATIONS_APP" >> $GITHUB_OUTPUT
+          echo "Resolved: Entitlements=$ENTITLEMENTS_APP, Recommendations=$RECOMMENDATIONS_APP"
+
       # 1. Build & Deploy EntitlementsService
       - name: Publish EntitlementsService
         run: |
@@ -68,30 +78,19 @@ jobs:
       - name: Deploy EntitlementsService to Azure App Service
         uses: azure/webapps-deploy@v3
         with:
-          app-name: resilience-demo-entitlements
+          app-name: ${{ steps.resolve-names.outputs.entitlements_app }}
           package: ./publish/entitlements
 
-      # 2. Build & Deploy RecommendationsService to STAGING Slot
+      # 2. Build & Deploy RecommendationsService (direct to production — no slots on F1)
       - name: Publish RecommendationsService
         run: |
           dotnet publish src/RecommendationsService/RecommendationsService.csproj -c Release -o ./publish/recommendations
 
-      - name: Deploy RecommendationsService to STAGING Slot
+      - name: Deploy RecommendationsService to Production
         uses: azure/webapps-deploy@v3
         with:
-          app-name: resilience-demo-recommendations
-          slot-name: staging
+          app-name: ${{ steps.resolve-names.outputs.recommendations_app }}
           package: ./publish/recommendations
-
-      # 3. Execute Automated Health Gates & Progressive Canary Shift
-      - name: Execute Canary Rollout & Atomic Slot Swap
-        run: |
-          chmod +x ./scripts/canary-rollout.sh
-          ./scripts/canary-rollout.sh \
-            -g ${{ env.AZURE_RESOURCE_GROUP }} \
-            -n resilience-demo-recommendations \
-            -s staging \
-            -w 15
 
   # ============================================================================
   # Job 3: Deploy Frontend (Client Portal SPA)
