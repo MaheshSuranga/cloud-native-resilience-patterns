@@ -103,7 +103,8 @@ builder.Services.AddCors(options =>
     {
         policy.AllowAnyOrigin()
               .AllowAnyHeader()
-              .AllowAnyMethod();
+              .AllowAnyMethod()
+              .WithExposedHeaders("X-Cache", "X-Cache-Store", "X-Read-Latency-Ms", "Retry-After");
     });
 });
 
