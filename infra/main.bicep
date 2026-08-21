@@ -25,7 +25,23 @@ module redisModule 'modules/redis.bicep' = {
   }
 }
 
-@description('The SKU for the App Service Plan. Use F1 (Free) for trial subscriptions, S1/P1v3 for production with deployment slots.')
+// =============================================================================
+// APP SERVICE PLAN SKU CONFIGURATION
+// =============================================================================
+// Current Setting: 'F1' (Free Tier)
+// Reason: Azure trial/student accounts have 0-quota limits for paid VMs (Standard/Premium)
+//         in some regions unless a quota increase is approved in the Azure Portal.
+//
+// PRODUCTION SETTING (Enables Deployment Slots & Canary Traffic Routing):
+//   - Use 'S1' (Standard) or 'P1v3' (Premium V3)
+//   - When set to 'S1' or 'P1v3', Bicep automatically deploys the 'staging' slot
+//     and enables slot-sticky configuration (slotConfigNames) in appservice.bicep.
+//
+// To switch to Production:
+//   param appServiceSku string = 'S1'   // Standard Tier ($73/mo, supports slots)
+//   param appServiceSku string = 'P1v3' // Premium V3 ($130/mo, dedicated vCPU & slots)
+// =============================================================================
+@description('The SKU for the App Service Plan. F1 for trial subscriptions, S1/P1v3 for production with staging slots.')
 param appServiceSku string = 'F1'
 
 // 2. Provision App Service Plan, EntitlementsService & RecommendationsService (with Staging Slot)

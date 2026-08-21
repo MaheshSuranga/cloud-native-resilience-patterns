@@ -33,6 +33,15 @@ jobs:
 
       - name: Provision Infrastructure via Bicep
         uses: azure/arm-deploy@v1
+        # ======================================================================
+        # App Service SKU Configuration:
+        #   - Current: appServiceSku=F1 (Free tier - trial accounts / 0-quota regions)
+        #   - Production: appServiceSku=S1 or appServiceSku=P1v3
+        #
+        # When upgrading to S1/P1v3:
+        #   1. Change appServiceSku=S1 below
+        #   2. Replace Job 2 (deploy-backend) with the Canary Deployment workflow below
+        # ======================================================================
         with:
           subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           resourceGroupName: ${{ env.AZURE_RESOURCE_GROUP }}
@@ -40,10 +49,14 @@ jobs:
           parameters: environmentName=prod resourcePrefix=resilience-demo appServiceSku=F1
 
   # ============================================================================
-  # Job 2: Deploy Microservices (Direct to Production — F1 tier, no slots)
+  # Job 2: Deploy Microservices (Direct to Production — for F1 Free Tier)
+  #
+  # NOTE: F1/B1 tiers do not support Azure Deployment Slots or Canary Routing.
+  # If you upgrade to S1 or P1v3, you can replace this job with the full
+  # CANARY DEPLOYMENT WORKFLOW provided in the commented block below.
   # ============================================================================
   deploy-backend:
-    name: 🚀 Deploy Backend Services
+    name: 🚀 Deploy Backend Services (Direct Deploy)
     needs: [deploy-infra]
     runs-on: ubuntu-latest
     steps:
@@ -81,7 +94,7 @@ jobs:
           app-name: ${{ steps.resolve-names.outputs.entitlements_app }}
           package: ./publish/entitlements
 
-      # 2. Build & Deploy RecommendationsService (direct to production — no slots on F1)
+      # 2. Build & Deploy RecommendationsService (Direct to production slot on F1)
       - name: Publish RecommendationsService
         run: |
           dotnet publish src/RecommendationsService/RecommendationsService.csproj -c Release -o ./publish/recommendations
@@ -102,6 +115,72 @@ jobs:
 
     outputs:
       recommendations_app: ${{ steps.resolve-names.outputs.recommendations_app }}
+
+  # ----------------------------------------------------------------------------
+  # [OPTIONAL / PRODUCTION ONLY]: Staging Slot & Automated Canary Release Workflow
+  # Use this when appServiceSku is set to 'S1' (Standard) or 'P1v3' (Premium).
+  # ----------------------------------------------------------------------------
+  # deploy-backend-canary:
+  #   name: 🚀 Deploy Backend & Canary Shift (Standard / Premium Tier)
+  #   needs: [deploy-infra]
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
+  #
+  #     - name: Setup .NET
+  #       uses: actions/setup-dotnet@v4
+  #       with:
+  #         dotnet-version: ${{ env.DOTNET_VERSION }}
+  #
+  #     - name: Log in to Azure
+  #       uses: azure/login@v2
+  #       with:
+  #         creds: ${{ secrets.AZURE_CREDENTIALS }}
+  #
+  #     - name: Resolve App Service Names
+  #       id: resolve-names
+  #       run: |
+  #         ENTITLEMENTS_APP=$(az webapp list --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --query "[?contains(name, 'entitlements')].name" -o tsv)
+  #         RECOMMENDATIONS_APP=$(az webapp list --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --query "[?contains(name, 'recommendations')].name" -o tsv)
+  #         echo "entitlements_app=$ENTITLEMENTS_APP" >> $GITHUB_OUTPUT
+  #         echo "recommendations_app=$RECOMMENDATIONS_APP" >> $GITHUB_OUTPUT
+  #
+  #     # Step 1: Deploy EntitlementsService
+  #     - name: Deploy EntitlementsService
+  #       run: dotnet publish src/EntitlementsService/EntitlementsService.csproj -c Release -o ./publish/entitlements
+  #     - uses: azure/webapps-deploy@v3
+  #       with:
+  #         app-name: ${{ steps.resolve-names.outputs.entitlements_app }}
+  #         package: ./publish/entitlements
+  #
+  #     # Step 2: Deploy RecommendationsService to STAGING Slot
+  #     - name: Deploy RecommendationsService to Staging Slot
+  #       run: dotnet publish src/RecommendationsService/RecommendationsService.csproj -c Release -o ./publish/recommendations
+  #     - uses: azure/webapps-deploy@v3
+  #       with:
+  #         app-name: ${{ steps.resolve-names.outputs.recommendations_app }}
+  #         slot-name: staging
+  #         package: ./publish/recommendations
+  #
+  #     # Step 3: Execute Canary Traffic Shifting & Atomic Slot Swap
+  #     - name: Execute Canary Rollout (10% -> 50% -> Atomic Swap)
+  #       run: |
+  #         chmod +x ./scripts/canary-rollout.sh
+  #         ./scripts/canary-rollout.sh \
+  #           -g ${{ env.AZURE_RESOURCE_GROUP }} \
+  #           -n ${{ steps.resolve-names.outputs.recommendations_app }} \
+  #           -s staging \
+  #           -w 15
+  #
+  #     - name: Configure CORS
+  #       run: |
+  #         az webapp cors add \
+  #           --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+  #           --name ${{ steps.resolve-names.outputs.recommendations_app }} \
+  #           --allowed-origins "*"
+  #   outputs:
+  #     recommendations_app: ${{ steps.resolve-names.outputs.recommendations_app }}
 
   # ============================================================================
   # Job 3: Deploy Frontend (Client Portal SPA)
